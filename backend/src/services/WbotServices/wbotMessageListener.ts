@@ -2240,6 +2240,16 @@ const filterMessages = (msg: WAMessage): boolean => {
 
 const wbotMessageListener = async (wbot: Session, companyId: number): Promise<void> => {
   try {
+    wbot.ev.on('messaging-history.set', async ({ isLatest, messages }) => {
+if (isLatest) {
+const filteredMessages = messages.filter(filterMessages);
+filteredMessages.forEach(async message => {
+await Promise.all([handleMessage(message, wbot, companyId)])
+await Promise.all([verifyRecentCampaign(message, companyId)]);
+await Promise.all([verifyCampaignMessageAndCloseTicket(message, companyId)]);
+})
+}
+});
     wbot.ev.on("messages.upsert", async (messageUpsert: ImessageUpsert) => {
       const messages = messageUpsert.messages
         .filter(filterMessages)
