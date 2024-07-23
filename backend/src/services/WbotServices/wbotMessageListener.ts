@@ -1655,7 +1655,8 @@ export const handleMessageIntegration = async (
 const handleMessage = async (
   msg: proto.IWebMessageInfo,
   wbot: Session,
-  companyId: number
+  companyId: number,
+  isHistorical: boolean = false
 ): Promise<void> => {
 
   let mediaSent: Message | undefined;
@@ -1715,7 +1716,6 @@ const handleMessage = async (
 
     let unreadMessages = 0;
 
-
     if (msg.key.fromMe) {
       await cacheLayer.set(`contacts:${contact.id}:unreads`, "0");
     } else {
@@ -1741,8 +1741,6 @@ const handleMessage = async (
 
     const ticket = await FindOrCreateTicketService(contact, wbot.id!, unreadMessages, companyId, groupContact);
 
-
-
     await provider(ticket, msg, companyId, contact, wbot as WASocket);
 
     // voltar para o menu inicial
@@ -1757,7 +1755,6 @@ const handleMessage = async (
       return;
     }
 
-
     const ticketTraking = await FindOrCreateATicketTrakingService({
       ticketId: ticket.id,
       companyId,
@@ -1766,34 +1763,7 @@ const handleMessage = async (
 
     try {
       if (!msg.key.fromMe) {
-        /**
-         * Tratamento para avaliação do atendente
-         */
-
-        //  // dev Ricardo: insistir a responder avaliação
-        //  const rate_ = Number(bodyMessage);
-
-        //  if ((ticket?.lastMessage.includes('_Insatisfeito_') || ticket?.lastMessage.includes('Por favor avalie nosso atendimento.')) &&  (!isFinite(rate_))) {
-        //      const debouncedSentMessage = debounce(
-        //        async () => {
-        //          await wbot.sendMessage(
-        //            `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"
-        //            }`,
-        //            {
-        //              text: 'Por favor avalie nosso atendimento.'
-        //            }
-        //          );
-        //        },
-        //        1000,
-        //        ticket.id
-        //      );
-        //      debouncedSentMessage();
-        //      return;
-        //  }
-        //  // dev Ricardo
-
         if (ticketTraking !== null && verifyRating(ticketTraking)) {
-
           handleRating(parseFloat(bodyMessage), ticket, ticketTraking);
           return;
         }
@@ -1827,12 +1797,8 @@ const handleMessage = async (
       }
     });
 
-
     try {
       if (!msg.key.fromMe && scheduleType) {
-        /**
-         * Tratamento para envio de mensagem quando a empresa está fora do expediente
-         */
         if (
           scheduleType.value === "company" &&
           !isNil(currentSchedule) &&
@@ -1857,12 +1823,7 @@ const handleMessage = async (
           return;
         }
 
-
         if (scheduleType.value === "queue" && ticket.queueId !== null) {
-
-          /**
-           * Tratamento para envio de mensagem quando a fila está fora do expediente
-           */
           const queue = await Queue.findByPk(ticket.queueId);
 
           const { schedules }: any = queue;
@@ -1910,7 +1871,6 @@ const handleMessage = async (
             }
           }
         }
-
       }
     } catch (e) {
       Sentry.captureException(e);
@@ -1929,7 +1889,6 @@ const handleMessage = async (
       console.log(e);
     }
 
-    //openai na conexao
     if (
       !ticket.queue &&
       !isGroup &&
@@ -1940,7 +1899,6 @@ const handleMessage = async (
       await handleOpenAi(msg, wbot, ticket, contact, mediaSent);
     }
 
-    //integraçao na conexao
     if (
       !msg.key.fromMe &&
       !ticket.isGroup &&
@@ -1958,7 +1916,6 @@ const handleMessage = async (
       return
     }
 
-    //openai na fila
     if (
       !isGroup &&
       !msg.key.fromMe &&
@@ -2010,11 +1967,7 @@ const handleMessage = async (
     await ticket.reload();
 
     try {
-      //Fluxo fora do expediente
       if (!msg.key.fromMe && scheduleType && ticket.queueId !== null) {
-        /**
-         * Tratamento para envio de mensagem quando a fila está fora do expediente
-         */
         const queue = await Queue.findByPk(ticket.queueId);
 
         const { schedules }: any = queue;
@@ -2067,10 +2020,7 @@ const handleMessage = async (
       console.log(e);
     }
 
-
-
     if (!whatsapp?.queues?.length && !ticket.userId && !isGroup && !msg.key.fromMe) {
-
       const lastMessage = await Message.findOne({
         where: {
           ticketId: ticket.id,
@@ -2084,7 +2034,6 @@ const handleMessage = async (
       }
 
       if (whatsapp.greetingMessage) {
-
         const debouncedSentMessage = debounce(
           async () => {
             await wbot.sendMessage(
@@ -2101,9 +2050,7 @@ const handleMessage = async (
         debouncedSentMessage();
         return;
       }
-
     }
-
 
     if (whatsapp.queues.length == 1 && ticket.queue) {
       if (ticket.chatbot && !msg.key.fromMe) {
@@ -2241,15 +2188,16 @@ const filterMessages = (msg: WAMessage): boolean => {
 const wbotMessageListener = async (wbot: Session, companyId: number): Promise<void> => {
   try {
     wbot.ev.on('messaging-history.set', async ({ isLatest, messages }) => {
-if (isLatest) {
-const filteredMessages = messages.filter(filterMessages);
-filteredMessages.forEach(async message => {
-await Promise.all([handleMessage(message, wbot, companyId)])
-await Promise.all([verifyRecentCampaign(message, companyId)]);
-await Promise.all([verifyCampaignMessageAndCloseTicket(message, companyId)]);
-})
-}
-});
+      if (isLatest) {
+        const filteredMessages = messages.filter(filterMessages);
+        for (const message of filteredMessages) {
+          await handleMessage(message, wbot, companyId, true); // Passando um flag para indicar que é histórico
+          await verifyRecentCampaign(message, companyId);
+          await verifyCampaignMessageAndCloseTicket(message, companyId);
+        }
+      }
+    });
+
     wbot.ev.on("messages.upsert", async (messageUpsert: ImessageUpsert) => {
       const messages = messageUpsert.messages
         .filter(filterMessages)
@@ -2257,8 +2205,7 @@ await Promise.all([verifyCampaignMessageAndCloseTicket(message, companyId)]);
 
       if (!messages) return;
 
-      messages.forEach(async (message: proto.IWebMessageInfo) => {
-
+      for (const message of messages) {
         const messageExists = await Message.count({
           where: { id: message.key.id!, companyId }
         });
@@ -2268,14 +2215,13 @@ await Promise.all([verifyCampaignMessageAndCloseTicket(message, companyId)]);
           await verifyRecentCampaign(message, companyId);
           await verifyCampaignMessageAndCloseTicket(message, companyId);
         }
-      });
+      }
     });
 
     wbot.ev.on("messages.update", (messageUpdate: WAMessageUpdate[]) => {
       if (messageUpdate.length === 0) return;
       messageUpdate.forEach(async (message: WAMessageUpdate) => {
-        (wbot as WASocket)!.readMessages([message.key])
-
+        (wbot as WASocket)!.readMessages([message.key]);
         handleMsgAck(message, message.update.status);
       });
     });
