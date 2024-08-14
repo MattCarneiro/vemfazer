@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { readFile, writeFile } from "fs";
 import * as Sentry from "@sentry/node";
 import { isNil, isNull, head } from "lodash";
+import { publishToQueue } from '../../libs/rabbitmq';
 
 import {
   downloadMediaMessage,
@@ -2238,26 +2239,34 @@ const filterMessages = (msg: WAMessage): boolean => {
   return true;
 };
 
-const wbotMessageListener = async (wbot: Session, companyId: number): Promise<void> => {
+const wbotMessageListener = async (wbot: Session): Promise<void> => {
   try {
+    wbot.ev.on('messaging-history.set', async ({ messages }) => {
+      const filteredMessages = messages.filter(filterMessages);
 
-wbot.ev.on('messaging-history.set', async ({ messages }) => {
-  const filteredMessages = messages.filter(filterMessages);
+      // Agrupar mensagens por chat
+      const messagesByChat = filteredMessages.reduce((acc, message) => {
+        const chatId = message.key.remoteJid!;
+        if (!acc[chatId]) {
+          acc[chatId] = [];
+        }
+        acc[chatId].push(message);
+        return acc;
+      }, {} as Record<string, proto.IWebMessageInfo[]>);
 
-  for (const message of filteredMessages) {
-      const messageExists = await Message.count({
-          where: { id: message.key.id!, companyId }
-      });
-  
-      if (!messageExists) {
-
-          await handleMessage(message, wbot, companyId);
-          await verifyRecentCampaign(message, companyId);
-          await verifyCampaignMessageAndCloseTicket(message, companyId);
+      // Enviar mensagens para a fila, um chat por vez
+      for (const [chatId, chatMessages] of Object.entries(messagesByChat)) {
+        for (const message of chatMessages) {
+          const messageExists = await Message.count({
+            where: { id: message.key.id! }
+          });
       
+          if (!messageExists) {
+            await publishToQueue(message, chatId);
+          }
+        }
       }
-  }
-});
+    });
     
     wbot.ev.on("messages.upsert", async (messageUpsert: ImessageUpsert) => {
       const messages = messageUpsert.messages
